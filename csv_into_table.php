@@ -12,7 +12,7 @@
 
 $dbname = 'test';
 $username = 'root';
-$passwd = 'bch.324';
+$passwd = '';
 $options = null;
 
 $specialFields = ['CommissionExt' => 'TEXT', 'CommissionValue' => 'TEXT'];
