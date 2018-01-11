@@ -10,12 +10,13 @@
  * 每次执行会删除旧表，生成新表
  */
 
-$dbname = 'test';
-$username = 'root';
-$passwd = '';
+$dbIni = parse_ini_file(__DIR__.'/config/db.ini');
+$dbname = $dbIni['dbname'];
+$username = $dbIni['username'];
+$passwd = $dbIni['passwd'];
 $options = null;
 
-$specialFields = ['CommissionExt' => 'TEXT', 'CommissionValue' => 'TEXT'];
+$specialFieldsBase = [];
 $unique = 'Domain';
 
 // only get filename
@@ -26,10 +27,30 @@ $pdo = new PDO('mysql:host=localhost;dbname='.$dbname, $username, $passwd, $opti
 foreach ($files as $file) {
     $fp = fopen(__DIR__.'/file/'.$file, 'r');
     $title = fgetcsv($fp);
+    // 还原字段类型
+    $specialFields = $specialFieldsBase;
+
+    restart:
     list($table, $fields) = extractTableInfo($file, $title, $specialFields);
     checkTable($table, $fields);
     while (false !== ($row = fgetcsv($fp))) {
-        insert($table, $row);
+        try {
+            insert($table, $row);
+        } catch (Exception $e) {
+            // 若字段太长则改为TEXT
+            if ($e->getCode() == 22001) {
+                foreach ($title as $specialField) {
+                    if (false !== strpos($e->getMessage(), $specialField)) {
+                        $specialFields[$specialField] = 'TEXT';
+                        goto restart;
+                    }
+                }
+            }
+
+            print_r($e->getMessage());
+            print_r($row);
+            exit();
+        }
     }
     fclose($fp);
 }
@@ -80,6 +101,7 @@ function checkTable($table, $fields)
 
 function insert($table, $row)
 {
+    global $specialFields;
     if (empty($row)) {
         return;
     }
@@ -92,18 +114,13 @@ function insert($table, $row)
         $sth->bindValue($i+1, $r);
     }
     $sth->execute();
-    try {
-        checkPdoError($sth);
-    } catch (PDOException $e) {
-        print_r($sth->errorInfo());
-        print_r($row);
-        exit();
-    }
+    checkPdoError($sth);
 }
 
 function checkPdoError(PDOStatement $sth)
 {
     if ($sth->errorCode() !== '00000') {
-        throw new PDOException('insert error!');
+        $error = $sth->errorInfo();
+        throw new Exception($error[2], $error[0]);
     }
 }
