@@ -38,7 +38,7 @@ foreach ($files as $file) {
             insert($table, $row);
         } catch (Exception $e) {
             // 若字段太长则改为TEXT
-            if ($e->getCode() == 22001) {
+            if ($e->getCode() === 1406) {
                 foreach ($title as $specialField) {
                     if (false !== strpos($e->getMessage(), $specialField)) {
                         $specialFields[$specialField] = 'TEXT';
@@ -97,11 +97,11 @@ function checkTable($table, $fields)
     $sql = "create table `$table` (\n$columns\n) ENGINE=MyISAM DEFAULT CHARSET=utf8";
 //    print_r($sql);
     $pdo->exec($sql);
+    checkPdoError($pdo);
 }
 
 function insert($table, $row)
 {
-    global $specialFields;
     if (empty($row)) {
         return;
     }
@@ -117,10 +117,10 @@ function insert($table, $row)
     checkPdoError($sth);
 }
 
-function checkPdoError(PDOStatement $sth)
+function checkPdoError($pdo)
 {
-    if ($sth->errorCode() !== '00000') {
-        $error = $sth->errorInfo();
-        throw new Exception($error[2], $error[0]);
+    if ($pdo->errorCode() !== '00000') {
+        $error = $pdo->errorInfo();
+        throw new Exception($error[2], $error[1]);
     }
 }
