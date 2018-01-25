@@ -9,22 +9,21 @@
 class CurlMulti
 {
     private $mh;
-    private $ch = [];
-    private $actualNum;
+    private $chs = [];
+    private $actualCountChs = 0;
 
-    public function __construct($num, array $options)
+    public function __construct($num = null)
     {
         $this->mh = curl_multi_init();
-        $this->actualNum = $num;
-        for ($i = 0; $i < $num; $i++) {
-            $this->ch[$i] = curl_init();
-            curl_setopt_array($this->ch[$i], $options);
+        if (null === $num) {
+            return;
         }
+        $this->initCh($num);
     }
 
     public function __destruct()
     {
-        foreach ($this->ch as $ch) {
+        foreach ($this->chs as $ch) {
             curl_multi_remove_handle($this->mh, $ch);
             curl_close($ch);
         }
@@ -32,31 +31,45 @@ class CurlMulti
     }
 
     /**
-     * set the url for ch respectively.
+     * set url and options for ch respectively.
      *
      * if the count of $urls less than the ch, it will auto adjust the ch counts in the mh.
-     * @param array $urls
+     * @param array $urls correspond to options
+     * @param array $options can only contain one element as array or just a array of options for all urls
+     * @throws Exception
      */
-    public function setUrls(array $urls)
+    public function setHandles(array $urls, array $options = [])
     {
-        if (count($this->ch) >= ($this->actualNum = count($urls))) {
-            foreach ($urls as $k => $url) {
-                curl_setopt($this->ch[$k], CURLOPT_URL, $url);
-                curl_multi_add_handle($this->mh, $this->ch[$k]);
-            }
-        } else {
-            echo 'warning! ch counts are less than urls.', PHP_EOL;
-            exit();
-        }
-    }
+        $countUrls = count($urls);
+        $countOptions = count($options);
 
-    /**
-     * after get all of the returns, must remove the ch which in mh.
-     */
-    public function clearUrls()
-    {
-        for ($i = 0; $i < $this->actualNum; $i++) {
-            curl_multi_remove_handle($this->mh, $this->ch[$i]);
+        // check options
+        if (!empty($options)) {
+            if (is_array(current($options))) {
+                if ($countOptions == 1) {
+                    $option = current($options);
+                } elseif ($countOptions != $countUrls) {
+                    throw new Exception('urls not match options.');
+                }
+            } else {
+                $option = $options;
+            }
+        }
+
+        // make sure $this->chs count equal $urls
+        if (($needChs = $countUrls - count($this->chs)) > 0) {
+            $this->initCh($needChs);
+        }
+        $this->actualCountChs = $countUrls;
+
+        foreach (array_values($urls) as $i => $url) {
+            curl_setopt($this->chs[$i], CURLOPT_URL, $url);
+            if (isset($option)) {
+                curl_setopt_array($this->chs[$i], $option);
+            } else {
+                curl_setopt_array($this->chs[$i], $options[$i]);
+            }
+            curl_multi_add_handle($this->mh, $this->chs[$i]);
         }
     }
 
@@ -84,17 +97,39 @@ class CurlMulti
      */
     public function getContents()
     {
-        for ($i = 0; $i < $this->actualNum; $i++) {
-            yield curl_multi_getcontent($this->ch[$i]);
+        for ($i = 0; $i < $this->actualCountChs; $i++) {
+            yield curl_multi_getcontent($this->chs[$i]);
         }
+        $this->clearHandles();
     }
 
     public function errorInfo()
     {
-        foreach ($this->ch as $k => $ch) {
+        foreach ($this->chs as $i => $ch) {
             if (($curlError = curl_error($ch)) != '') {
-                echo "error $k: ", $curlError, PHP_EOL;
+                echo "error $i: ", $curlError, PHP_EOL;
             }
+        }
+    }
+
+
+    /**
+     * @param $num
+     */
+    private function initCh($num)
+    {
+        for ($i = 0; $i < $num; $i++) {
+            $this->chs[] = curl_init();
+        }
+    }
+
+    /**
+     * after get all of the returns, must remove the ch which in mh.
+     */
+    private function clearHandles()
+    {
+        for ($i = 0; $i < $this->actualCountChs; $i++) {
+            curl_multi_remove_handle($this->mh, $this->chs[$i]);
         }
     }
 }
