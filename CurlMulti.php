@@ -1,5 +1,7 @@
 <?php
 /**
+ * Async Curl
+ *
  * Created by PhpStorm.
  * User: buck
  * Date: 2017/10/23
@@ -9,16 +11,40 @@
 class CurlMulti
 {
     private $mh;
+    private $closure;
+    private $closureArgs = [];
     private $chs = [];
     private $actualCountChs = 0;
 
-    public function __construct($num = null)
+    public function __construct(int $num = 0)
     {
         $this->mh = curl_multi_init();
-        if (null === $num) {
+        if (!$num) {
             return;
         }
-        $this->initCh($num);
+        $this->initChs($num);
+    }
+
+    /**
+     * '''closure signature'''
+     * function ($ch [,$args]) {}
+     * @param Closure $closure
+     */
+    public function setClosure(Closure $closure)
+    {
+        $this->closure = $closure;
+    }
+
+    /**
+     * Set args for a group of chs
+     * @param $chs
+     * @param array ...$args
+     */
+    public function setClosureArgs($chs, ...$args)
+    {
+        foreach ($chs as $ch) {
+            $this->closureArgs[$ch] = $args;
+        }
     }
 
     public function __destruct()
@@ -31,52 +57,54 @@ class CurlMulti
     }
 
     /**
-     * set url and options for ch respectively.
+     * Set url and options for ch respectively.
      *
-     * if the count of $urls less than the ch, it will auto adjust the ch counts in the mh.
-     * @param array $urls correspond to options
-     * @param array $options can only contain one element as array or just a array of options for all urls
-     * @throws Exception
+     * If the count of $urls not equal to the ch, it will auto adjust the ch counts in the mh.
+     * @param array|string $urls correspond to options
+     * @param array $options can only contain one element as array or just a array of curl options for all urls
+     * @return array all keys of $this->chs
      */
-    public function setHandles(array $urls, array $options = [])
+    public function setHandles($urls, array $options)
     {
-        $countUrls = count($urls);
-        $countOptions = count($options);
-
-        // check options
-        if (!empty($options)) {
-            if (is_array(current($options))) {
-                if ($countOptions == 1) {
-                    $option = current($options);
-                } elseif ($countOptions != $countUrls) {
-                    throw new Exception('urls not match options.');
-                }
-            } else {
-                $option = $options;
-            }
-        }
-
-        // make sure $this->chs count equal $urls
-        if (($needChs = $countUrls - count($this->chs)) > 0) {
-            $this->initCh($needChs);
-        }
-        $this->actualCountChs = $countUrls;
+        $this->ensureParams($urls, $options);
+        $this->clearHandles();
+        $this->adjustChs(count($urls));
 
         foreach (array_values($urls) as $i => $url) {
             curl_setopt($this->chs[$i], CURLOPT_URL, $url);
-            if (isset($option)) {
-                curl_setopt_array($this->chs[$i], $option);
-            } else {
-                curl_setopt_array($this->chs[$i], $options[$i]);
-            }
+            curl_setopt_array($this->chs[$i], isset($options[$i]) ? $options[$i] : $options[0]);
             curl_multi_add_handle($this->mh, $this->chs[$i]);
+            $this->actualCountChs++;
         }
+        return range(0, $this->actualCountChs);
+    }
+
+    /**
+     * Add handles but not more than $this->chs.
+     *
+     * @param array|string $urls
+     * @param array $options
+     * @return array keys of $this->chs this added
+     */
+    public function addHandles($urls, array $options)
+    {
+        $this->ensureParams($urls, $options);
+        $this->adjustChs(count($urls));
+
+        $start = $this->actualCountChs;
+        foreach (array_values($urls) as $i => $url) {
+            curl_setopt($this->chs[$this->actualCountChs], CURLOPT_URL, $url);
+            curl_setopt_array($this->chs[$this->actualCountChs], isset($options[$i]) ? $options[$i] : $options[0]);
+            curl_multi_add_handle($this->mh, $this->chs[$this->actualCountChs]);
+            $this->actualCountChs++;
+        }
+        return range($start, $this->actualCountChs);
     }
 
     public function exec()
     {
         $active = null;
-        //execute the handles
+
         do {
             $mrc = curl_multi_exec($this->mh, $active);
         } while ($mrc == CURLM_CALL_MULTI_PERFORM);
@@ -87,12 +115,20 @@ class CurlMulti
             }
             do {
                 $mrc = curl_multi_exec($this->mh, $active);
+                while ($this->closure && false !== ($info = curl_multi_info_read($this->mh))) {
+                    $keyCh = array_search($info['handle'], $this->chs);
+                    // use $this when call closure
+                    ($this->closure)($info['handle'], ...$this->closureArgs[$keyCh]);
+                }
             } while ($mrc == CURLM_CALL_MULTI_PERFORM);
         }
+        $this->clearHandles();
     }
 
     /**
      * Iterate it to get every ch's return.
+     *
+     * If the Iterator is not end, must call $this->clearHandles explicitly
      * @return Generator
      */
     public function getContents()
@@ -100,7 +136,23 @@ class CurlMulti
         for ($i = 0; $i < $this->actualCountChs; $i++) {
             yield curl_multi_getcontent($this->chs[$i]);
         }
-        $this->clearHandles();
+    }
+
+    public function getContent($ch)
+    {
+        if (in_array($ch, $this->chs)) {
+            return curl_multi_getcontent($ch);
+        }
+    }
+
+    /**
+     * After get all of the returns, must remove the ch which in mh.
+     */
+    public function clearHandles()
+    {
+        for ($i = 0; $i < $this->actualCountChs; $i++) {
+            curl_multi_remove_handle($this->mh, $this->chs[$i]);
+        }
     }
 
     public function errorInfo()
@@ -116,7 +168,7 @@ class CurlMulti
     /**
      * @param $num
      */
-    private function initCh($num)
+    private function initChs($num)
     {
         for ($i = 0; $i < $num; $i++) {
             $this->chs[] = curl_init();
@@ -124,12 +176,36 @@ class CurlMulti
     }
 
     /**
-     * after get all of the returns, must remove the ch which in mh.
+     * Make sure $urls be array, $options two-dimension.
+     *
+     * @param mixed $urls
+     * @param array $options
+     * @throws Exception
      */
-    private function clearHandles()
+    private function ensureParams(&$urls, array &$options)
     {
-        for ($i = 0; $i < $this->actualCountChs; $i++) {
-            curl_multi_remove_handle($this->mh, $this->chs[$i]);
+        if (is_string($urls)) {
+            $urls = [$urls];
+        }
+        $countOptions = count($options);
+        $countUrls = count($urls);
+
+        if (!$countUrls || !$countOptions) {
+            throw new Exception('urls and options can not be empty.');
+        }
+
+        if (is_array(current($options))) {
+            if ($countOptions != $countUrls) {
+                throw new Exception('urls not match options.');
+            }
+        }
+        $options = [$options];
+    }
+
+    private function adjustChs(int $need)
+    {
+        if (($need = $this->actualCountChs + $need - count($this->chs)) > 0) {
+            $this->initChs($need);
         }
     }
 }
