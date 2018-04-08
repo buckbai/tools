@@ -89,11 +89,7 @@ class Algorithm
 
         $sort = [];
         while ($left && $right) {
-            if ($left[0] <= $right[0]) {
-                $sort[] = array_shift($left);
-            } else {
-                $sort[] = array_shift($right);
-            }
+            $sort[] = $left[0] <= $right[0] ? array_shift($left) : array_shift($right);
         }
         $sort = array_merge($sort, $left, $right);
         return $sort;
@@ -132,12 +128,12 @@ class Algorithm
         if ($search > $sequence[$end] || $search < $sequence[$start]) {
             return false;
         }
-        while ($start < $end) {
+        while ($start <= $end) {
             $half = floor(($start + $end) / 2);
             if ($search > $sequence[$half]) {
-                $start = $half;
+                $start = $half + 1;
             } elseif ($search < $sequence[$half]) {
-                $end = $half;
+                $end = $half - 1;
             } else {
                 return $half;
             }
